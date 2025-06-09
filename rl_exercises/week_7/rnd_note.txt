@@ -1,0 +1,5 @@
+We implemented RND on top of DQN and tested it in the LunarLander-v3 environment. The agent was trained with a low intrinsic reward weight (0.01) for 200,000 steps.
+
+Compared to baseline DQN, RND-DQN performed worse and showed greater instability. This suggests that RND is not a good fit for dense-reward environments like LunarLander-v3, where external rewards already guide exploration.
+
+RND may be more effective in sparse-reward tasks. In our case, it added noise rather than improving performance.

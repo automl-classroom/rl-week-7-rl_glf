@@ -8,8 +8,24 @@ import gymnasium as gym
 import hydra
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from omegaconf import DictConfig
 from rl_exercises.week_4.dqn import DQNAgent, set_seed
+
+
+class RNDNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, output_dim=128):
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x):
+        return self.model(x)
 
 
 class RNDDQNAgent(DQNAgent):
@@ -80,7 +96,18 @@ class RNDDQNAgent(DQNAgent):
         )
         self.seed = seed
         # TODO: initialize the RND networks
-        ...
+        input_dim = env.observation_space.shape[0]
+        output_dim = rnd_hidden_size
+        self.rnd_target = RNDNetwork(input_dim, rnd_hidden_size, rnd_hidden_size)
+        self.rnd_predictor = RNDNetwork(input_dim, rnd_hidden_size, rnd_hidden_size)
+        self.rnd_optimizer = optim.Adam(self.rnd_predictor.parameters(), lr=rnd_lr)
+        for param in self.rnd_target.parameters():
+            param.requires_grad = False
+        self.rnd_update_freq = rnd_update_freq
+        self.rnd_reward_weight = rnd_reward_weight
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.rnd_target.to(self.device)
+        self.rnd_predictor.to(self.device)
 
     def update_rnd(
         self, training_batch: List[Tuple[Any, Any, float, Any, bool, Dict]]
@@ -96,7 +123,16 @@ class RNDDQNAgent(DQNAgent):
         # TODO: get states and next_states from the batch
         # TODO: compute the MSE
         # TODO: update the RND network
-        ...
+        states = np.array([transition[0] for transition in training_batch])
+        states_tensor = torch.FloatTensor(states).to(self.device)
+        with torch.no_grad():
+            target_embeddings = self.rnd_target(states_tensor)
+        pred_embeddings = self.rnd_predictor(states_tensor)
+        loss = (pred_embeddings - target_embeddings).pow(2).mean()
+        self.rnd_optimizer.zero_grad()
+        loss.backward()
+        self.rnd_optimizer.step()
+        return loss.item()
 
     def get_rnd_bonus(self, state: np.ndarray) -> float:
         """Compute the RND bonus for a given state.
@@ -113,7 +149,12 @@ class RNDDQNAgent(DQNAgent):
         """
         # TODO: predict embeddings
         # TODO: get error
-        ...
+        state_tensor = torch.FloatTensor(state).to(self.device).unsqueeze(0)
+        with torch.no_grad():
+            target = self.rnd_target(state_tensor)
+        pred = self.rnd_predictor(state_tensor)
+        mse = (pred - target).pow(2).mean()
+        return mse.item()
 
     def train(self, num_frames: int, eval_interval: int = 1000) -> None:
         """
@@ -137,7 +178,8 @@ class RNDDQNAgent(DQNAgent):
             next_state, reward, done, truncated, _ = self.env.step(action)
 
             # TODO: apply RND bonus
-            reward += ...
+            bonus = self.get_rnd_bonus(next_state)
+            reward += self.rnd_reward_weight * bonus
 
             # store and step
             self.buffer.add(state, action, reward, next_state, done or truncated, {})
@@ -149,8 +191,8 @@ class RNDDQNAgent(DQNAgent):
                 batch = self.buffer.sample(self.batch_size)
                 _ = self.update_agent(batch)
 
-            if self.total_steps % self.rnd_update_freq == 0:
-                self.update_rnd(batch)
+                if self.total_steps % self.rnd_update_freq == 0:
+                    self.update_rnd(batch)
 
             if done or truncated:
                 state, _ = self.env.reset()
@@ -179,8 +221,8 @@ def main(cfg: DictConfig):
     set_seed(env, cfg.seed)
 
     # 3) TODO: instantiate & train the agent
-    agent = ...
-    agent.train(...)
+    agent = RNDDQNAgent(env, seed=cfg.seed)
+    agent.train(num_frames=cfg.train.frames)
 
 
 if __name__ == "__main__":
